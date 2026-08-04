@@ -180,14 +180,40 @@ def run_draft_mode(user, league, players_cache):
                       for p in picks]
     drafted_str = ", ".join([n.strip() for n in drafted_names if n.strip()])
 
+    # Pull current roster (if any -- rookie/startup drafts may have little or nothing yet)
+    # so the recommendation is grounded in team timeline, not just best-player-available.
+    roster_summary = "No existing roster data available."
+    try:
+        rosters = sget(f"/league/{league['league_id']}/rosters")
+        my_roster = next((r for r in rosters if r.get("owner_id") == user["user_id"]), None)
+        if my_roster and my_roster.get("players"):
+            ids = my_roster["players"]
+            players = load_players_minimal(ids)
+            names = [player_name(players, pid) for pid in ids]
+            wins = my_roster.get("settings", {}).get("wins", 0)
+            losses = my_roster.get("settings", {}).get("losses", 0)
+            roster_summary = f"Current roster ({wins}-{losses} last season): {', '.join(names)}"
+    except Exception:
+        pass
+
     reco = call_claude(
-        "You are an expert fantasy football draft assistant. Be direct and name specific players. "
-        "Search for current dynasty/redraft rankings and ADP before answering.",
+        "You are my dynasty fantasy football GM, not a redraft assistant. Dynasty means I keep this "
+        "roster indefinitely across future seasons, so evaluate every player on long-term asset value, "
+        "not just next season's fantasy points. Weigh: player age and career-stage trajectory, my team's "
+        "actual competitive window (rebuilding vs. contending, based on my current roster strength and "
+        "recent record), positional depth I already have vs. still need, and how a pick's dynasty value "
+        "compares to trading it away. Never just default to redraft ADP or 'best player available' -- "
+        "explain the roster-construction and timeline reasoning behind each recommendation. "
+        "Search for current dynasty rookie rankings, dynasty startup ADP, and player age/situation before answering.",
         f"League: {league.get('name')} | {teams} teams | Round {current_round + 1}\n"
-        f"Already drafted: {drafted_str or 'nobody yet'}\n\n"
-        f"It's about to be my turn (I'm {picks_until_me} picks away). "
-        f"Recommend my top 3 available targets right now and why. Keep it under 200 words, plain text.",
-        max_tokens=500,
+        f"{roster_summary}\n"
+        f"Already drafted by the league so far: {drafted_str or 'nobody yet'}\n\n"
+        f"It's about to be my turn (I'm {picks_until_me} picks away). Recommend my top 3 available "
+        f"targets right now. For each, state: the player, their dynasty value/age context, and WHY they "
+        f"fit my team's specific timeline and roster needs right now -- not just that they're the highest "
+        f"ranked player left. If my roster suggests I should be rebuilding, say so and prioritize accordingly. "
+        f"Keep it under 250 words, plain text, no markdown symbols.",
+        max_tokens=600,
     )
 
     subject = f"Fantasy GM: You're on the clock soon! ({league.get('name')})"
