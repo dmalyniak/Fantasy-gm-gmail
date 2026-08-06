@@ -23,11 +23,14 @@ Optional:
 
 import os
 import sys
+import json
 import smtplib
 import ssl
 from email.mime.text import MIMEText
 from datetime import datetime, timezone
 import requests
+
+STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state", "seen_trades.json")
 
 SLEEPER_USERNAME = os.environ["SLEEPER_USERNAME"]
 SEASON = os.environ.get("SEASON", str(datetime.now().year))
@@ -223,6 +226,124 @@ def run_draft_mode(user, league, players_cache):
     print("Sent draft email.")
 
 
+def load_seen_trades():
+    try:
+        with open(STATE_PATH, "r") as f:
+            return set(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
+
+
+def save_seen_trades(seen_ids):
+    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+    with open(STATE_PATH, "w") as f:
+        json.dump(sorted(seen_ids), f)
+
+
+def run_trade_mode(user, league, players_cache):
+    rosters = sget(f"/league/{league['league_id']}/rosters")
+    my_roster = next((r for r in rosters if r.get("owner_id") == user["user_id"]), None)
+    if not my_roster:
+        print("Could not find your roster. Skipping.")
+        return
+    my_id = my_roster["roster_id"]
+
+    week = max(league.get("settings", {}).get("leg", 1), 1)
+    weeks_to_check = sorted(set([0, week - 1, week, week + 1]))
+    weeks_to_check = [w for w in weeks_to_check if w >= 0]
+
+    all_tx = []
+    for w in weeks_to_check:
+        try:
+            t = sget(f"/league/{league['league_id']}/transactions/{w}")
+            if isinstance(t, list):
+                all_tx.extend(t)
+        except Exception:
+            pass
+
+    trades = [t for t in all_tx if t.get("type") == "trade" and t.get("status") not in ("complete", "failed")]
+
+    def involves_me(tx):
+        rids = [int(x) for x in (tx.get("roster_ids") or [])]
+        consenters = [int(x) for x in (tx.get("consenter_ids") or [])]
+        adds = [int(v) for v in (tx.get("adds") or {}).values()]
+        drops = [int(v) for v in (tx.get("drops") or {}).values()]
+        return my_id in rids or my_id in consenters or my_id in adds or my_id in drops
+
+    my_trades = [t for t in trades if involves_me(t)]
+    seen = load_seen_trades()
+    new_trades = [t for t in my_trades if t.get("transaction_id") not in seen]
+
+    if not new_trades:
+        print("No new pending trades. Skipping.")
+        return
+
+    users = sget(f"/league/{league['league_id']}/users")
+
+    def team_name(rid):
+        r = next((r for r in rosters if r["roster_id"] == rid), None)
+        if not r:
+            return "Unknown"
+        u = next((u for u in users if u["user_id"] == r.get("owner_id")), None)
+        return (u.get("metadata", {}).get("team_name") if u else None) or (u.get("display_name") if u else None) or f"Team {rid}"
+
+    my_wins = my_roster.get("settings", {}).get("wins", 0)
+    my_losses = my_roster.get("settings", {}).get("losses", 0)
+    my_ids = my_roster.get("players") or []
+    my_players_cache = load_players_minimal(my_ids)
+    my_roster_names = [player_name(my_players_cache, pid) for pid in my_ids]
+
+    for tx in new_trades:
+        adds = tx.get("adds") or {}
+        drops = tx.get("drops") or {}
+        get_ids = [pid for pid, rid in adds.items() if int(rid) == my_id]
+        give_ids = [pid for pid, rid in drops.items() if int(rid) == my_id]
+        involved_ids = list(set(get_ids + give_ids))
+        players = load_players_minimal(involved_ids)
+
+        get_str = ", ".join(player_name(players, pid) for pid in get_ids) or "nothing"
+        give_str = ", ".join(player_name(players, pid) for pid in give_ids) or "nothing"
+
+        other_rid = next((int(r) for r in (tx.get("roster_ids") or []) if int(r) != my_id), None)
+        other_team = team_name(other_rid) if other_rid else "another team"
+
+        reco = call_claude(
+            "You are my dynasty fantasy football GM evaluating a trade offer someone sent me. "
+            "Think long-term asset value, not just this week's points: player age, career trajectory, "
+            "my team's competitive window (rebuilding vs contending, based on my record and roster), "
+            "and positional need/depth I already have. Search for current injury news and dynasty trade "
+            "value for the players involved before answering. End your response with exactly one line: "
+            "SCORE:[0-100] where 100 = incredible for me, 50 = fair, 0 = terrible for me.",
+            f"My team record: {my_wins}-{my_losses}\n"
+            f"My current roster: {', '.join(my_roster_names)}\n\n"
+            f"Trade offer from {other_team}:\n"
+            f"I would GIVE: {give_str}\n"
+            f"I would GET: {get_str}\n\n"
+            f"1. Value of what I give up, in dynasty terms (age, role, trend)\n"
+            f"2. Value of what I get, same lens\n"
+            f"3. Does this fit my team's timeline and needs specifically?\n"
+            f"4. Verdict: Accept / Counter / Decline, and why\n"
+            f"Keep it under 250 words, plain text, no markdown symbols.\n"
+            f"SCORE:[0-100]",
+            max_tokens=700,
+        )
+
+        subject = f"Fantasy GM: Trade Offer from {other_team} — needs a decision"
+        body = (
+            f"You have a new trade offer in {league.get('name')}.\n\n"
+            f"From: {other_team}\n"
+            f"You give: {give_str}\n"
+            f"You get: {get_str}\n\n"
+            f"{reco}\n\n"
+            f"— Review and respond in Sleeper."
+        )
+        send_email(subject, body)
+        print(f"Sent trade email for transaction {tx.get('transaction_id')}.")
+        seen.add(tx.get("transaction_id"))
+
+    save_seen_trades(seen)
+
+
 def main():
     user, league = get_league()
     mode = FORCE_MODE or ("draft" if league.get("status") == "drafting" else "lineup")
@@ -230,6 +351,8 @@ def main():
 
     if mode == "draft":
         run_draft_mode(user, league, {})
+    elif mode == "trade":
+        run_trade_mode(user, league, {})
     else:
         run_lineup_mode(user, league, {})
 
