@@ -249,8 +249,10 @@ def run_trade_mode(user, league, players_cache):
     my_id = my_roster["roster_id"]
 
     week = max(league.get("settings", {}).get("leg", 1), 1)
-    weeks_to_check = sorted(set([0, week - 1, week, week + 1]))
-    weeks_to_check = [w for w in weeks_to_check if w >= 0]
+    # Pre-draft/offseason trade proposals don't reliably file under a
+    # predictable "current week" number, so rather than guess, just
+    # check every week of the season. Sleeper's API is cheap/fast here.
+    weeks_to_check = list(range(0, 19))
 
     all_tx = []
     for w in weeks_to_check:
