@@ -1,0 +1,43 @@
+name: Fantasy GM Trade Watcher
+
+# Checks every 30 minutes for new pending trade offers on your roster.
+# When it finds one it hasn't emailed you about yet, it sends a graded
+# evaluation (accept/counter/decline with dynasty-GM reasoning) and
+# remembers the trade's ID in state/seen_trades.json so it won't email
+# you again about the same offer on the next run.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed so the workflow can save which trades it already emailed you about
+
+jobs:
+  check-trades:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python fantasy_gm_email.py
+        env:
+          SLEEPER_USERNAME: ${{ secrets.SLEEPER_USERNAME }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          SEASON: ${{ secrets.SEASON }}
+          LEAGUE_NAME: ${{ secrets.LEAGUE_NAME }}
+          MODE: trade
+
+      - name: Save trade memory
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/seen_trades.json || true
+          git diff --staged --quiet || git commit -m "chore: update seen trades"
+          git push || true
