@@ -263,7 +263,16 @@ def run_trade_mode(user, league, players_cache):
         except Exception:
             pass
 
-    trades = [t for t in all_tx if t.get("type") == "trade" and t.get("status") not in ("complete", "failed")]
+    print(f"DEBUG: total transactions fetched across weeks 0-18: {len(all_tx)}")
+    all_types = sorted(set(t.get("type") for t in all_tx))
+    print(f"DEBUG: transaction types seen: {all_types}")
+
+    trades = [t for t in all_tx if t.get("type") == "trade"]
+    print(f"DEBUG: raw trade-type transactions (any status): {len(trades)}")
+    for t in trades:
+        print(f"DEBUG: trade tx_id={t.get('transaction_id')} status={t.get('status')} roster_ids={t.get('roster_ids')} consenter_ids={t.get('consenter_ids')}")
+
+    trades = [t for t in trades if t.get("status") not in ("complete", "failed")]
 
     def involves_me(tx):
         rids = [int(x) for x in (tx.get("roster_ids") or [])]
@@ -272,7 +281,9 @@ def run_trade_mode(user, league, players_cache):
         drops = [int(v) for v in (tx.get("drops") or {}).values()]
         return my_id in rids or my_id in consenters or my_id in adds or my_id in drops
 
+    print(f"DEBUG: my roster_id = {my_id}")
     my_trades = [t for t in trades if involves_me(t)]
+    print(f"DEBUG: trades involving me: {len(my_trades)}")
     seen = load_seen_trades()
     new_trades = [t for t in my_trades if t.get("transaction_id") not in seen]
 
