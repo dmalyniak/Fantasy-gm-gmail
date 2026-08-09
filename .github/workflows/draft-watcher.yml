@@ -1,18 +1,17 @@
 name: Fantasy GM Draft Watcher
 
-# This checks every 2 minutes whether your draft is live and you're
-# coming up soon, and emails you a recommendation if so. It exits
-# instantly (no email, minimal cost) if no draft is currently active,
-# so it's safe to leave running.
+# This checks every 15 minutes whether your draft has active picks
+# happening and you're coming up soon, and emails you a recommendation
+# if so. It exits instantly (no email, minimal cost) if nothing is
+# in progress, so it's safe to leave running.
 #
-# Note: GitHub only guarantees schedules run "at least this often" --
-# on the free tier, high platform load can occasionally delay a run
-# by a few extra minutes beyond the requested interval. In practice
-# it's close to on-time, but don't treat 2 minutes as an exact clock.
+# 15 minutes is plenty given an 8-hour-per-pick slow draft; if your
+# league ever runs a fast live draft instead, drop this back down
+# (e.g. */3) for tighter lead time.
 
 on:
   schedule:
-    - cron: '*/2 * * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 jobs:
