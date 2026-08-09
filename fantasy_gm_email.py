@@ -152,10 +152,27 @@ BENCH: {', '.join(bench) or 'none'}"""
 
 def run_draft_mode(user, league, players_cache):
     drafts = sget(f"/league/{league['league_id']}/drafts")
-    draft = next((d for d in drafts if d.get("status") == "drafting"), None)
-    if not draft:
-        print("No active draft right now. Skipping.")
+    # Sleeper's status field (both at the league level and the draft level) can be
+    # stale/stuck at "pre_draft" even while a draft is genuinely live in the app.
+    # Rather than trust that field, find the non-complete draft with picks actually
+    # in it -- that's a much more reliable signal that it's really underway.
+    candidates = [d for d in drafts if d.get("status") != "complete"]
+    draft = None
+    most_picks = -1
+    for d in candidates:
+        try:
+            p = sget(f"/draft/{d['draft_id']}/picks")
+            if len(p) > most_picks:
+                most_picks = len(p)
+                draft = d
+        except Exception:
+            continue
+
+    if not draft or most_picks <= 0:
+        print("No draft with picks in progress. Skipping.")
         return
+
+    print(f"DEBUG: using draft_id={draft['draft_id']} (reported status={draft.get('status')}), {most_picks} picks made so far")
 
     draft_id = draft["draft_id"]
     picks = sget(f"/draft/{draft_id}/picks")
