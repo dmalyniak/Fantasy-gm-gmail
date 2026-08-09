@@ -169,12 +169,27 @@ def run_draft_mode(user, league, players_cache):
     settings = draft.get("settings", {})
     teams = settings.get("teams", len(draft_order) or 10)
     picks_made = len(picks)
-    current_round = picks_made // teams
-    pos_in_round = picks_made % teams
-    # Snake draft: even rounds go 1..N, odd rounds go N..1
-    slot_on_clock = (pos_in_round + 1) if current_round % 2 == 0 else (teams - pos_in_round)
 
-    picks_until_me = (slot_on_clock - my_slot) % teams
+    def slot_at_pick_index(idx):
+        # idx is 0-based overall pick number. Returns which draft slot (1..teams) picks at that index.
+        rnd = idx // teams
+        pos = idx % teams
+        return (pos + 1) if rnd % 2 == 0 else (teams - pos)
+
+    current_round = picks_made // teams
+
+    # Simulate forward from the next pick to find how many picks until it's actually my turn.
+    # (A shortcut formula here previously broke at snake-draft round turnarounds.)
+    picks_until_me = None
+    for lookahead in range(0, teams * 2):
+        idx = picks_made + lookahead
+        if slot_at_pick_index(idx) == my_slot:
+            picks_until_me = lookahead
+            break
+    if picks_until_me is None:
+        print("Could not determine upcoming pick position. Skipping.")
+        return
+
     if picks_until_me > 2:
         print(f"Not close to your pick yet ({picks_until_me} picks away). Skipping email.")
         return
